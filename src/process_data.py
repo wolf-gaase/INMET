@@ -143,6 +143,7 @@ def extrair_e_consolidar_inmet(pasta_zips="../data", codigo_estacao=None, arquiv
     
     pasta_zips_abs = os.path.abspath(pasta_zips)
     arquivo_saida_abs = os.path.abspath(arquivo_saida)
+    caminho_estacoes = os.path.abspath("../data/estacoes_meteorologicas.csv") #Arquivo com nome e código das estações
 
     # Evita que ao informar apenas a região Sul ou Norte traga também SE ou NE
     if codigo_estacao in {"N","NE","CO","SE","S"}:
@@ -179,11 +180,36 @@ def extrair_e_consolidar_inmet(pasta_zips="../data", codigo_estacao=None, arquiv
         print("Nenhum dado válido pôde ser extraído.")
         return
 
-    print("\nConcatenando dados ...")
+    print("\nConcatenando todos os dados limpos...")
     df_final = pl.concat(dados_consolidados)
-       
+    
+    # Cruzamento de dados com o CSV de referência
+    if os.path.exists(caminho_estacoes):
+        print("Corrigindo nomes de estações 'Desconhecida' usando o arquivo de referência...")
+        
+        # Lê o CSV de referência e renomeia a coluna para evitar conflito no join
+        df_ref = pl.read_csv(caminho_estacoes, separator=";").select(["codigo_wmo", "nome_estacao"])
+        df_ref = df_ref.rename({"nome_estacao": "nome_estacao_correto"})
+        
+        # Faz o cruzamento (Left Join) baseado no código WMO
+        df_final = df_final.join(df_ref, on="codigo_wmo", how="left")
+        
+        # Substitui os valores apenas onde for "Desconhecida" ou Nulo
+        df_final = df_final.with_columns(
+            pl.when(
+                (pl.col("nome_estacao") == "Desconhecida") | 
+                (pl.col("nome_estacao").is_null())
+            )
+            .then(pl.col("nome_estacao_correto"))
+            .otherwise(pl.col("nome_estacao"))
+            .alias("nome_estacao")
+        ).drop("nome_estacao_correto") # Remove a coluna auxiliar do join
+    else:
+        print(f"Aviso: Arquivo de referência '{caminho_estacoes}' não encontrado. Pulando correção.")
+
+    # 3. Salvamento direto no Parquet (Rápido e limpo)
     df_final.write_parquet(arquivo_saida_abs)
-    print(f"\nSucesso! Arquivo salvo em: '{arquivo_saida_abs}'")
+    print(f"\nSucesso absoluto! Arquivo salvo em: '{arquivo_saida_abs}'")
     #print(f"Total de horas processadas: {df_final.shape[0]:,}")
 
 if __name__ == "__main__":
